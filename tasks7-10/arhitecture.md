@@ -179,3 +179,78 @@ db.settings.update(
 | Слияние гостевой корзины в пользовательскую, если пользователь залогинится, добавить её items в корзину { user_id, status:"active" }; | Primary | Операция записи
 | Слияние гостевой корзины в пользовательскую, если пользователь залогинится, отметить гостевую как abandoned | Primary | Операция записи
 | Отметка корзины как заказанной | Primary | Операция записи
+
+# Задание 10. Миграция на Cassandra: модель данных, стратегии репликации и шардирования
+для аналитики, реалтайм чтение может страдать
+### 10.1
+Критически выжными для целостности и скорости обработки можно выделить:
+- Orders - пользователь должен видить всегда точную информацию по своему заказу и оформлять его быстро
+- Products - неверная информация по продукту может отпугнуть клиента совершить покупку
+
+Перенос коллекций  в Cassandra:
+- Orders - количество исторических заказов со временем растёт и создаёт нагрузку при перераспределении, также критично иметь отказоустойчивый статус заказа
+- Carts - наличие корзины у всех пользователей в том числе и не зарегистрированных создаёт большое количество данных которое нужно перераспределять, небольшой рассинхрон в состоянии допустим, но важно в конце концов перед оформлением заказа не потерять товар обеспечив синхронизацию узлов при сбое
+- Sessions - хранение сессии чувствительно к сбоям, но задержка получение состояния допустима 
+
+
+### 10.2
+```shell
+CREATE KEYSPACE IF NOT EXISTS somedb WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};
+USE somedb;
+```
+
+#### Orders
+- id, geo_zone - partition keys распределение данных по узлам в зависимосити от id заказа для равномерности и geo_zone для доступности в разных зонах
+- status, updated_at - cluster keys для более часто запрашиваемых заказов которые были недавно обновлены
+
+```shell
+CREATE TABLE IF NOT EXISTS orders (
+    id UUID,
+    client_id UUID,
+    product_ids_list LIST<text>,
+    created_at timestamp,
+    updated_at timestamp,
+    status text,
+    total_price decimal,
+    geo_zone text,
+    PRIMARY KEY ((id, geo_zone), status, geo_zone, updated_at)
+);
+```
+
+#### Сarts
+- id - partition key распределение данных по узлам в зависимосити от id для равномерности
+- status, updated_at - cluster keys для более часто запрашиваемых данных которые были недавно обновлены
+
+```shell
+CREATE TABLE IF NOT EXISTS carts (
+    id UUID,
+    user_id UUID,
+    session_id UUID,
+    items map<text, int>,
+    status text,
+    created_at timestamp,
+    updated_at timestamp,
+    expires_at timestamp,
+    PRIMARY KEY ((id), status)
+);
+```
+
+#### Sessions
+- id, geo_zone - partition key распределение данных по узлам в зависимосити от id для равномерности и geo_zone для доступности в разных зонах
+- created_at - cluster keys для более часто запрашиваемых сессий которые были недавно созданы
+
+```shell
+CREATE TABLE IF NOT EXISTS sessions (
+    id UUID,
+    user_id UUID,
+    created_at timestamp,
+    geo_zone text,
+    PRIMARY KEY ((id, geo_zone), created_at)
+);
+```
+
+### 10.3
+Для обеспечения целостности данных следует использвать три стратегии каждую для своего случая 
+- Hinted Handoff - при кратковременных сбоях, подойдёт для Orders и Carts вместе с Read Repair для высокой доступности и консистентности, и отдельно для Sessions
+- Read Repair - для быстрой консистентности часто читаемых данных, подойдёт для Orders и Carts вместе с Hinted Handoff для высокой доступности и консистентности
+- Anti-Entropy Repair - ручнон восстановление для редко читаемых и долго недоступных разделах, подойдёт для восстановления истории заказов при долговременных сбоях
