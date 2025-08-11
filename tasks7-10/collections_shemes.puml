@@ -1,0 +1,49 @@
+class Orders {
+    + id: String
+    + clientId: String
+    + createdAt: Timestamp
+    + productIdsList: [ ]String
+    + status: String
+    + totalPrice: Double
+    + geoZone: String
+}
+
+class Products {
+    + id: String
+    + name: String
+    + category: String
+    + price: Double
+    + geoZonesStock: [ ]{ geoZone: string, quantity: Int }
+    + attributes: [ ]String
+}
+
+class Carts {
+    + id: String
+    + userId: String
+    + sessionId: String
+    + items: [ ]{productId: string, quantity: Int}
+    + status: String
+    + createdAt: Timestamp
+    + updatedAt: Timestamp
+    + expiresAt: Timestamp
+}
+
+class Users {
+    + id: String
+    + createdAt: Timestamp
+    + updatedAt: Timestamp
+    + geoZone: String
+}
+
+class Sessions {
+    + id: String
+    + createdAt: Timestamp
+    + updatedAt: Timestamp
+    + geoZone: String
+}
+
+Orders "1" -- "1..*" Products : contains
+Orders "0..*" -- "1" Users : clientId
+Carts "1" -- "0..*" Products : items
+Carts "1" -- "1" Users : has
+Carts "1" -- "1" Sessions : has
